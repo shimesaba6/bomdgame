@@ -39,11 +39,11 @@
             width: 100%;
         }
         #timer-display {
-            font-size: 20vw; /* スマホでもPCでも画面幅に合わせて巨大化 */
+            font-size: 20vw;
             font-weight: bold;
             line-height: 1;
             margin: 0;
-            font-family: monospace; /* 数字の幅を揃える */
+            font-family: monospace;
         }
         #message-display {
             font-size: 5vw;
@@ -71,7 +71,7 @@
     </div>
 
     <div id="main-screen">
-        <div id="timer-display">---.--</div>
+        <div id="timer-display">180.00</div>
         <div id="message-display">Pico2からの信号を待機中...</div>
         
         <div id="restart-container">
@@ -84,7 +84,6 @@
         let reader;
         let writer;
         
-        // 画面の要素
         const setupScreen = document.getElementById('setup-screen');
         const mainScreen = document.getElementById('main-screen');
         const timerDisplay = document.getElementById('timer-display');
@@ -92,37 +91,34 @@
         const restartContainer = document.getElementById('restart-container');
         const restartBtn = document.getElementById('restart-btn');
         
-        // 音声要素
         const bgm = document.getElementById('bgm');
         const seSuccess = document.getElementById('se-success');
         const seFail = document.getElementById('se-fail');
 
-        // タイマー用変数
         let timerRunning = false;
         let gameOver = false;
         let bgmStarted = false;
         let startTicks = 0;
         let totalDuration = 0;
 
-        // 【接続ボタンの処理】
         document.getElementById('connect-btn').addEventListener('click', async () => {
             try {
-                // 音声ロックの解除（ブラウザの仕様対策）
                 bgm.volume = 0; bgm.play(); setTimeout(()=> { bgm.pause(); bgm.volume = 1; }, 10);
                 
-                // USBポートの要求と接続
-                port = await navigator.serial.requestPort();
+                // ★突破ポイント: Raspberry PiのUSBベンダーID(0x2E8A)を指定して、強制的にフィルターをかけます
+                const filters = [
+                    { usbVendorId: 0x2e8a } // Raspberry Piの公式ID
+                ];
+                
+                // フィルターを適用してポート要求
+                port = await navigator.serial.requestPort({ filters });
                 await port.open({ baudRate: 115200 });
 
                 setupScreen.style.display = 'none';
                 mainScreen.style.display = 'block';
                 
-                // Picoに開始合図「S」を送る
                 sendStartSignal();
-
-                // 読み取りループの開始
                 readLoop();
-                // 画面の更新ループ開始
                 requestAnimationFrame(updateDisplay);
                 
             } catch (error) {
@@ -130,7 +126,6 @@
             }
         });
 
-        // 【再挑戦ボタンの処理】
         restartBtn.addEventListener('click', () => {
             gameOver = false;
             timerRunning = false;
@@ -147,7 +142,6 @@
             sendStartSignal();
         });
 
-        // Picoへ開始合図を送る関数
         async function sendStartSignal() {
             if (port && port.writable) {
                 const textEncoder = new TextEncoderStream();
@@ -158,7 +152,6 @@
             }
         }
 
-        // Picoからのデータを受信・翻訳するループ
         async function readLoop() {
             const textDecoder = new TextDecoderStream();
             const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
@@ -172,7 +165,7 @@
                     
                     buffer += value;
                     let lines = buffer.split(/\r?\n/);
-                    buffer = lines.pop(); // 最後の不完全な行はバッファに残す
+                    buffer = lines.pop();
                     
                     for (let line of lines) {
                         processLine(line.trim());
@@ -185,7 +178,6 @@
             }
         }
 
-        // 1行ごとのメッセージ処理
         function processLine(line) {
             if (!line) return;
 
@@ -224,21 +216,19 @@
                 timerDisplay.style.color = "#ff3232";
                 messageDisplay.innerText = "ドカーーーン！！ (任務失敗)";
                 messageDisplay.style.color = "#ff3232";
-                document.body.style.backgroundColor = "#3a0000"; // 背景を暗い赤に
+                document.body.style.backgroundColor = "#3a0000";
                 timerRunning = false;
                 gameOver = true;
                 restartContainer.style.display = 'block';
             }
         }
 
-        // 0.01秒単位の高速タイマー描画ループ (60FPS)
         function updateDisplay() {
             if (timerRunning && !gameOver) {
                 let elapsedSec = (performance.now() - startTicks) / 1000.0;
                 let currentTime = totalDuration - elapsedSec;
                 if (currentTime <= 0) currentTime = 0.0;
                 
-                // 000.00 の形式にフォーマット
                 let timeStr = currentTime.toFixed(2).padStart(6, '0');
                 timerDisplay.innerText = timeStr;
             }
@@ -246,4 +236,4 @@
         }
     </script>
 </body>
-</html>.html
+</html>
