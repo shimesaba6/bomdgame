@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>時限爆弾モニター</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: 'Meiryo', 'Hiragino Kaku Gothic Pro', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            transition: background-color 0.5s;
+        }
+        #setup-screen {
+            text-align: center;
+        }
+        #connect-btn, #restart-btn {
+            padding: 15px 40px;
+            font-size: 24px;
+            font-weight: bold;
+            color: #fff;
+            background-color: #007bff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        #connect-btn:hover, #restart-btn:hover { background-color: #0056b3; }
+        #main-screen {
+            display: none;
+            text-align: center;
+            width: 100%;
+        }
+        #timer-display {
+            font-size: 20vw; /* スマホでもPCでも画面幅に合わせて巨大化 */
+            font-weight: bold;
+            line-height: 1;
+            margin: 0;
+            font-family: monospace; /* 数字の幅を揃える */
+        }
+        #message-display {
+            font-size: 5vw;
+            font-weight: bold;
+            margin-top: 20px;
+            color: #fff;
+            min-height: 8vw;
+        }
+        #restart-container {
+            display: none;
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+
+    <audio id="bgm" src="時計じかけ.mp3" loop></audio>
+    <audio id="se-success" src="成功.mp3"></audio>
+    <audio id="se-fail" src="爆発.mp3"></audio>
+
+    <div id="setup-screen">
+        <h1>【極秘】回路監視システム</h1>
+        <p>Pico2をUSBで接続し、下のボタンを押して許可してください</p>
+        <button id="connect-btn">システムに接続する</button>
+    </div>
+
+    <div id="main-screen">
+        <div id="timer-display">---.--</div>
+        <div id="message-display">Pico2からの信号を待機中...</div>
+        
+        <div id="restart-container">
+            <button id="restart-btn">ワイヤーを挿して 再挑戦</button>
+        </div>
+    </div>
+
+    <script>
+        let port;
+        let reader;
+        let writer;
+        
+        // 画面の要素
+        const setupScreen = document.getElementById('setup-screen');
+        const mainScreen = document.getElementById('main-screen');
+        const timerDisplay = document.getElementById('timer-display');
+        const messageDisplay = document.getElementById('message-display');
+        const restartContainer = document.getElementById('restart-container');
+        const restartBtn = document.getElementById('restart-btn');
+        
+        // 音声要素
+        const bgm = document.getElementById('bgm');
+        const seSuccess = document.getElementById('se-success');
+        const seFail = document.getElementById('se-fail');
+
+        // タイマー用変数
+        let timerRunning = false;
+        let gameOver = false;
+        let bgmStarted = false;
+        let startTicks = 0;
+        let totalDuration = 0;
+
+        // 【接続ボタンの処理】
+        document.getElementById('connect-btn').addEventListener('click', async () => {
+            try {
+                // 音声ロックの解除（ブラウザの仕様対策）
+                bgm.volume = 0; bgm.play(); setTimeout(()=> { bgm.pause(); bgm.volume = 1; }, 10);
+                
+                // USBポートの要求と接続
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+
+                setupScreen.style.display = 'none';
+                mainScreen.style.display = 'block';
+                
+                // Picoに開始合図「S」を送る
+                sendStartSignal();
+
+                // 読み取りループの開始
+                readLoop();
+                // 画面の更新ループ開始
+                requestAnimationFrame(updateDisplay);
+                
+            } catch (error) {
+                alert('接続に失敗しました: ' + error);
+            }
+        });
+
+        // 【再挑戦ボタンの処理】
+        restartBtn.addEventListener('click', () => {
+            gameOver = false;
+            timerRunning = false;
+            bgmStarted = false;
+            document.body.style.backgroundColor = "#000";
+            timerDisplay.style.color = "#fff";
+            timerDisplay.innerText = "180.00";
+            messageDisplay.innerText = "Pico2の起動を待機中...";
+            messageDisplay.style.color = "#fff";
+            restartContainer.style.display = 'none';
+            bgm.pause();
+            bgm.currentTime = 0;
+            
+            sendStartSignal();
+        });
+
+        // Picoへ開始合図を送る関数
+        async function sendStartSignal() {
+            if (port && port.writable) {
+                const textEncoder = new TextEncoderStream();
+                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                writer = textEncoder.writable.getWriter();
+                await writer.write("S");
+                writer.releaseLock();
+            }
+        }
+
+        // Picoからのデータを受信・翻訳するループ
+        async function readLoop() {
+            const textDecoder = new TextDecoderStream();
+            const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+            reader = textDecoder.readable.getReader();
+            let buffer = "";
+
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += value;
+                    let lines = buffer.split(/\r?\n/);
+                    buffer = lines.pop(); // 最後の不完全な行はバッファに残す
+                    
+                    for (let line of lines) {
+                        processLine(line.trim());
+                    }
+                }
+            } catch (error) {
+                messageDisplay.innerText = "通信エラー。リロードしてください。";
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+        // 1行ごとのメッセージ処理
+        function processLine(line) {
+            if (!line) return;
+
+            if (line === "START_BGM" || (line.startsWith("TIME:") && !bgmStarted)) {
+                bgm.play();
+                bgmStarted = true;
+                gameOver = false;
+                messageDisplay.innerText = "回路監視システム作動中...";
+            }
+            
+            if (line.startsWith("TIME:")) {
+                if (!timerRunning && !gameOver) {
+                    totalDuration = parseFloat(line.split(":")[1]);
+                    startTicks = performance.now();
+                    timerRunning = true;
+                }
+            } 
+            else if (line.startsWith("MSG:")) {
+                messageDisplay.innerText = line.split(":")[1];
+            } 
+            else if (line === "MISSION_COMPLETE") {
+                bgm.pause();
+                seSuccess.play();
+                timerDisplay.innerText = "CLEAR!";
+                timerDisplay.style.color = "#32ff64";
+                messageDisplay.innerText = "爆弾解除 成功！！";
+                messageDisplay.style.color = "#32ff64";
+                timerRunning = false;
+                gameOver = true;
+                restartContainer.style.display = 'block';
+            } 
+            else if (line === "MISSION_FAILED") {
+                bgm.pause();
+                seFail.play();
+                timerDisplay.innerText = "000.00";
+                timerDisplay.style.color = "#ff3232";
+                messageDisplay.innerText = "ドカーーーン！！ (任務失敗)";
+                messageDisplay.style.color = "#ff3232";
+                document.body.style.backgroundColor = "#3a0000"; // 背景を暗い赤に
+                timerRunning = false;
+                gameOver = true;
+                restartContainer.style.display = 'block';
+            }
+        }
+
+        // 0.01秒単位の高速タイマー描画ループ (60FPS)
+        function updateDisplay() {
+            if (timerRunning && !gameOver) {
+                let elapsedSec = (performance.now() - startTicks) / 1000.0;
+                let currentTime = totalDuration - elapsedSec;
+                if (currentTime <= 0) currentTime = 0.0;
+                
+                // 000.00 の形式にフォーマット
+                let timeStr = currentTime.toFixed(2).padStart(6, '0');
+                timerDisplay.innerText = timeStr;
+            }
+            requestAnimationFrame(updateDisplay);
+        }
+    </script>
+</body>
+</html>.html
